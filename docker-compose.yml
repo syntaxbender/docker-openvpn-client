@@ -1,13 +1,47 @@
 services:
   openvpn-client:
-    image: ghcr.io/wfg/openvpn-client:latest
-    container_name: openvpn-client
+    image: openvpn-client-image:latest
+    container_name: openvpn-client-container
+    build:
+      dockerfile: Dockerfile
+      context: ovpn-build
     cap_add:
       - NET_ADMIN
     devices:
       - /dev/net/tun:/dev/net/tun
-    environment:
-      - ALLOWED_SUBNETS=192.168.10.0/24
     volumes:
-      - ./local:/config
+      - ./config:/config:ro
+    ports:
+      - "3128:3128"
+    dns:
+      - 8.8.8.8
+      - 1.1.1.1
     restart: unless-stopped
+    networks:
+      - shared-network
+    env_file:
+      - ./ovpn-build/openvpn.env
+    environment:
+      - OVPN_USER
+      - OVPN_PASS
+  squid:
+    image: squid-image:latest
+    container_name: squid-container
+    network_mode: service:openvpn-client
+    build:
+      dockerfile: Dockerfile
+      context: squid-build
+    restart: unless-stopped
+    volumes:
+      - squid_logs:/var/log/squid
+    env_file:
+      - ./squid-build/squid.env
+    environment:
+      - SQUID_AUTH_USER
+      - SQUID_AUTH_PASS
+networks:
+  shared-network:
+    name: shared-network
+volumes:
+  squid_logs:
+    
