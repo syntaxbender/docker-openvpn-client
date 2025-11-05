@@ -134,3 +134,10 @@ PASSWD_FILE="/etc/squid/passwd"
 ---
 
 For more details, refer to the `docker-compose.yml` file and the scripts in the `ovpn-build` and `squid-build` directories.
+
+
+# next release targets:
+- tls connection client between proxy server.
+- sock5 better for systemwide tunneling.
+- better auth for proxy
+- visualize proxy server logs
