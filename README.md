@@ -1,126 +1,136 @@
 # OpenVPN Client for Docker
 
-Archived in favor of [a WireGuard version](https://github.com/wfg/docker-wireguard).
-
 ## What is this and what does it do?
-[`ghcr.io/wfg/openvpn-client`](https://github.com/users/wfg/packages/container/package/openvpn-client) is a containerized OpenVPN client.
-It has a kill switch built with `iptables` that kills Internet connectivity to the container if the VPN tunnel goes down for any reason.
-
-This image requires you to supply the necessary OpenVPN configuration file(s).
-Because of this, any VPN provider should work.
-
-If you find something that doesn't work or have an idea for a new feature, issues and **pull requests are welcome** (however, I'm not promising they will be merged).
+This project provides a containerized OpenVPN client with an integrated Squid HTTP proxy. It includes a kill switch built with `iptables` to block internet connectivity if the VPN tunnel goes down.
+The project is designed to work with any VPN provider by supplying the necessary OpenVPN configuration file(s).
 
 ## Why?
-Having a containerized VPN client lets you use container networking to easily choose which applications you want using the VPN instead of having to set up split tunnelling.
-It also keeps you from having to install an OpenVPN client on the underlying host.
+Using a containerized VPN client allows you to:
+- Easily manage which applications use the VPN by leveraging container networking.
+- Avoid installing an OpenVPN client on the host machine.
+- Log traffic passing through the Squid proxy for monitoring or debugging purposes.
+- Provide application-specific access to the VPN network instead of routing the entire network through the VPN.
 
 ## How do I use it?
 ### Getting the image
-You can either pull it from GitHub Container Registry or build it yourself.
+You can either pull the image or build it yourself.
 
-To pull it from GitHub Container Registry, run
-```
-docker pull ghcr.io/wfg/openvpn-client
-```
-
-To build it yourself, run
-```
-docker build -t ghcr.io/wfg/openvpn-client https://github.com/wfg/docker-openvpn-client.git#:build
+To pull the image:
+```bash
+docker pull openvpn-client-image:latest
 ```
 
-### Creating and running a container
-The image requires the container be created with the `NET_ADMIN` capability and `/dev/net/tun` accessible.
-Below are bare-bones examples for `docker run` and Compose; however, you'll probably want to do more than just run the VPN client.
-See the below to learn how to have [other containers use `openvpn-client`'s network stack](#using-with-other-containers).
-
-#### `docker run`
-```
-docker run --detach \
-  --name=openvpn-client \
-  --cap-add=NET_ADMIN \
-  --device=/dev/net/tun \
-  --volume <path/to/config/dir>:/config \
-  ghcr.io/wfg/openvpn-client
+To build it yourself:
+```bash
+docker-compose build
 ```
 
-#### `docker-compose`
+### Creating and running the container
+The project requires the following environment variables to be set at runtime:
+- `OVPN_USER`: OpenVPN username
+- `OVPN_PASS`: OpenVPN password
+- `SQUID_AUTH_USER`: Squid proxy username
+- `SQUID_AUTH_PASS`: Squid proxy password
+
+Example:
+```bash
+OVPN_USER=your_vpn_user OVPN_PASS=your_vpn_pass SQUID_AUTH_USER=proxy_user SQUID_AUTH_PASS=proxy_pass docker compose up
+```
+
+### Docker Compose Configuration
+Below is an example `docker-compose.yml` configuration:
 ```yaml
 services:
   openvpn-client:
-    image: ghcr.io/wfg/openvpn-client
-    container_name: openvpn-client
+    image: openvpn-client-image:latest
+    container_name: openvpn-client-container
+    build:
+      dockerfile: Dockerfile
+      context: ovpn-build
     cap_add:
       - NET_ADMIN
     devices:
-      - /dev/net/tun
+      - /dev/net/tun:/dev/net/tun
     volumes:
-      - <path/to/config/dir>:/config
+      - ./config:/config:ro
+    ports:
+      - "3128:3128"
+    dns:
+      - 8.8.8.8
+      - 1.1.1.1
     restart: unless-stopped
+    networks:
+      - shared-network
+    env_file:
+      - ./ovpn-build/openvpn.env
+    environment:
+      - OVPN_USER
+      - OVPN_PASS
+
+  squid:
+    image: squid-image:latest
+    container_name: squid-container
+    network_mode: service:openvpn-client
+    build:
+      dockerfile: Dockerfile
+      context: squid-build
+    restart: unless-stopped
+    volumes:
+      - squid_logs:/var/log/squid
+    env_file:
+      - ./squid-build/squid.env
+    environment:
+      - SQUID_AUTH_USER
+      - SQUID_AUTH_PASS
+
+networks:
+  shared-network:
+    name: shared-network
+
+volumes:
+  squid_logs:
 ```
-
-#### Environment variables
-| Variable | Default (blank is unset) | Description |
-| --- | --- | --- |
-| `ALLOWED_SUBNETS` | | A list of one or more comma-separated subnets (e.g. `192.168.0.0/24,192.168.1.0/24`) to allow outside of the VPN tunnel. |
-| `AUTH_SECRET` | | Docker secret that contains the credentials for accessing the VPN. |
-| `CONFIG_FILE` | | The OpenVPN configuration file or search pattern. If unset, a random `.conf` or `.ovpn` file will be selected. |
-| `KILL_SWITCH` | `on` | Whether or not to enable the kill switch. Set to any "truthy" value[1] to enable. |
-
-[1] "Truthy" values in this context are the following: `true`, `t`, `yes`, `y`, `1`, `on`, `enable`, or `enabled`.
-
-##### Environment variable considerations
-###### `ALLOWED_SUBNETS`
-If you intend on connecting to containers that use the OpenVPN container's network stack (which you probably do), **you will probably want to use this variable**.
-Regardless of whether or not you're using the kill switch, the entrypoint script also adds routes to each of the `ALLOWED_SUBNETS` to allow network connectivity from outside of Docker.
-
-##### `AUTH_SECRET`
-Compose has support for [Docker secrets](https://docs.docker.com/engine/swarm/secrets/#use-secrets-in-compose).
-See the [Compose file](docker-compose.yml) in this repository for example usage of passing proxy credentials as Docker secrets.
-
-### Using with other containers
-Once you have your `openvpn-client` container up and running, you can tell other containers to use `openvpn-client`'s network stack which gives them the ability to utilize the VPN tunnel.
-There are a few ways to accomplish this depending how how your container is created.
-
-If your container is being created with
-1. the same Compose YAML file as `openvpn-client`, add `network_mode: service:openvpn-client` to the container's service definition.
-2. a different Compose YAML file than `openvpn-client`, add `network_mode: container:openvpn-client` to the container's service definition.
-3. `docker run`, add `--network=container:openvpn-client` as an option to `docker run`.
-
-Once running and provided your container has `wget` or `curl`, you can run `docker exec <container_name> wget -qO - ifconfig.me` or `docker exec <container_name> curl -s ifconfig.me` to get the public IP of the container and make sure everything is working as expected.
-This IP should match the one of `openvpn-client`.
-
-#### Handling ports intended for connected containers
-If you have a connected container and you need to access a port that container, you'll want to publish that port on the `openvpn-client` container instead of the connected container.
-To do that, add `-p <host_port>:<container_port>` if you're using `docker run`, or add the below snippet to the `openvpn-client` service definition in your Compose file if using `docker-compose`.
-```yaml
-ports:
-  - <host_port>:<container_port>
-```
-In both cases, replace `<host_port>` and `<container_port>` with the port used by your connected container.
 
 ### Verifying functionality
-Once you have container running `ghcr.io/wfg/openvpn-client`, run the following command to spin up a temporary container using `openvpn-client` for networking.
-The `wget -qO - ifconfig.me` bit will return the public IP of the container (and anything else using `openvpn-client` for networking).
-You should see an IP address owned by your VPN provider.
-```
-docker run --rm -it --network=container:openvpn-client alpine wget -qO - ifconfig.me
-```
+To verify that the VPN and proxy are working correctly, you can:
+1. Check the public IP of the container:
+   ```bash
+   docker exec openvpn-client-container wget -qO - ifconfig.me
+   ```
+2. Ensure Squid proxy authentication works by connecting to the proxy with the provided credentials.
 
 ### Troubleshooting
-#### VPN authentication
-Your OpenVPN configuration file may not come with authentication baked in.
-To provide OpenVPN the necessary credentials, create a file (any name will work, but this example will use `credentials.txt`) next to the OpenVPN configuration file with your username on the first line and your password on the second line.
+#### VPN Authentication
+If your OpenVPN configuration file does not include authentication, ensure you provide the `OVPN_USER` and `OVPN_PASS` environment variables at runtime. These credentials will be dynamically used to create a temporary file within the container.
 
-For example:
-```
-vpn_username
-vpn_password
+#### Squid Proxy Authentication
+Squid proxy credentials are dynamically generated at runtime using the `SQUID_AUTH_USER` and `SQUID_AUTH_PASS` environment variables. Ensure these are set correctly when starting the container.
+
+### Example .env Files
+
+Below are example `.env` files for the OpenVPN and Squid configurations. Ensure these files are not pushed to version control as they may contain sensitive information.
+
+#### `ovpn-build/openvpn.env`
+```plaintext
+CONFIG_FILE=/config/example.ovpn
+KILL_SWITCH=1
+ALLOWED_SUBNETS=192.168.0.0/24,192.168.1.0/24
 ```
 
-In the OpenVPN configuration file, add the following line:
-```
-auth-user-pass credentials.txt
+#### `squid-build/squid.env`
+```plaintext
+SQUID_DIR_CACHE=/var/spool/squid
+SQUID_DIR_LOG=/var/log/squid
+SQUID_DIR_LIB=/var/lib/squid
+SQUID_USER=squid
+SQUID_DH_SIZE=1024
+SQUID_DOCKER_LOGS=yes
+SQUID_DOCKER_LOGS_CACHE=yes
+SQUID_CERT_CN="/CN=Forward Proxy"
+SQUID_DIR_CONF="/etc/squid"
+PASSWD_FILE="/etc/squid/passwd"
 ```
 
-This will tell OpenVPN to read `credentials.txt` whenever it needs credentials.
+---
+
+For more details, refer to the `docker-compose.yml` file and the scripts in the `ovpn-build` and `squid-build` directories.
