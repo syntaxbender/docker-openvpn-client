@@ -98,6 +98,11 @@ To verify that the VPN and proxy are working correctly, you can:
    docker exec openvpn-client-container wget -qO - ifconfig.me
    ```
 2. Ensure Squid proxy authentication works by connecting to the proxy with the provided credentials.
+### Connect other containers to openvpn container network
+
+```bash
+docker run --rm -it --network=container:openvpn-client-container ubuntu:22.04 bash
+```
 
 ### Troubleshooting
 #### VPN Authentication
